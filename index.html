@@ -318,10 +318,6 @@ button,input{font-family:inherit}
 .test-msg{max-width:min(70vw,calc(var(--s)*34));font-weight:600;font-size:max(13px,calc(var(--s)*1.9));line-height:1.3;color:#2b2560;background:#fff;
   border:3px solid #8fc3f0;border-radius:14px;padding:.4em .8em;box-shadow:0 4px 0 #5d97d4;opacity:0;transform:translateY(-6px);transition:.25s;pointer-events:none}
 .test-msg.show{opacity:1;transform:none}
-.replay{margin-left:.3em;width:max(44px,1.5em);height:max(44px,1.5em);border-radius:50%;border:3px solid #fff;cursor:pointer;padding:0;display:inline-grid;place-items:center;
-  background:linear-gradient(#6fd0ff,#1e74e0);box-shadow:0 3px 0 #0f4f9e;vertical-align:middle}
-.replay svg{width:58%;height:58%}
-.replay:active{transform:translateY(2px)}
 .icon-btn{flex:0 0 auto;width:max(44px,calc(var(--s)*5.6));height:max(44px,calc(var(--s)*5.6));border-radius:50%;border:calc(var(--s)*.3) solid #fff;cursor:pointer;
   background:linear-gradient(#6fd0ff,#1e74e0);display:grid;place-items:center;padding:0;
   box-shadow:inset 0 calc(var(--s)*.35) 0 rgba(255,255,255,.5),0 calc(var(--s)*.35) 0 #0f4f9e}
@@ -1138,7 +1134,7 @@ function getAudio() {
 /* Buka kunci audio pada sentuhan/klik pertama.
    Pelayar (terutama iPhone/iPad & Chrome) menyekat bunyi sehingga pengguna menyentuh skrin. */
 const SILENT_WAV = "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==";
-let silentEl = null, speechUnlocked = false;
+let silentEl = null;
 function unlockAudio() {
   const c = getAudio();
   try {
@@ -1154,14 +1150,6 @@ function unlockAudio() {
       const pr = silentEl.play(); if (pr && pr.catch) pr.catch(() => { silentEl = null; });
     }
   } catch (e) { /* abaikan */ }
-  // Suara (speechSynthesis) perlu dimulakan sekali dalam sentuhan pengguna
-  try {
-    if (!speechUnlocked && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance(" "); u.volume = 0;
-      window.speechSynthesis.speak(u); speechUnlocked = true;
-    }
-  } catch (e) { /* abaikan */ }
-  pickVoice();
 }
 function tone(c, f, t, d, type, v, to) {
   const o = c.createOscillator();
@@ -1208,76 +1196,22 @@ function renderSoundBtn() {
 function toggleSound() {
   state.soundOn = !state.soundOn;
   renderSoundBtn();
-  if (!state.soundOn) stopSpeech();
   playSound("click");
 }
-/* Sebutan perkataan (hanya jika suara Bahasa Melayu/Indonesia tersedia) */
-let malayVoice = null;
-function pickVoice() {
-  if (!("speechSynthesis" in window)) return;
-  const v = window.speechSynthesis.getVoices();
-  const pick = (re) => v.find(x => re.test(x.lang) && x.localService) || v.find(x => re.test(x.lang));
-  malayVoice = pick(/^ms([-_]|$)/i) || pick(/^(id|in)([-_]|$)/i) ||
-    v.find(x => /malay|melayu|indonesia/i.test(x.name)) || null;
+/* Paparan suku kata satu demi satu (tanpa sebutan suara):
+   "bo" → "+ la" → "= bola". revealRun membatalkan paparan lama apabila soalan bertukar. */
+let revealRun = 0;
+function stopReveal() { revealRun++; }
+function revealSequence(steps, onPart, onDone) {
+  const run = ++revealRun;
+  for (let i = 0; i < steps; i++) setTimeout(() => { if (run === revealRun) onPart(i); }, 150 + i * 450);
+  setTimeout(() => { if (run === revealRun) onDone(); }, 150 + steps * 450 + 250);
 }
-/* Sebut suku kata satu demi satu: "bo" → "la" → "bola".
-   Setiap bahagian dipaparkan TEPAT ketika ia mula disebut (onstart),
-   jadi audio dan teks sentiasa seiring. Jika tiada suara / suara lambat,
-   paparan berjalan ikut masa tetap. */
-let speechQ = [];          // simpan rujukan (elak Chrome buang utterance sebelum onend)
-let speechRun = 0;         // id larian semasa; larian lama diabaikan
-function stopSpeech() {
-  speechRun++;
-  try { if ("speechSynthesis" in window) window.speechSynthesis.cancel(); } catch (e) { /* abaikan */ }
-}
-function speakParts(parts, onPart, onDone) {
-  const run = ++speechRun;
-  let finished = false, started = false, fallback = false;
-  const timers = [];
-  const alive = () => run === speechRun && !finished;
-  const finish = () => {
-    if (!alive()) return;
-    finished = true;
-    timers.forEach(clearTimeout);
-    onDone();
-  };
-  const timed = () => {                       // paparan bermasa (tanpa suara)
-    fallback = true;
-    parts.forEach((_, i) => timers.push(setTimeout(() => { if (alive()) onPart(i); }, i * 500)));
-    timers.push(setTimeout(finish, parts.length * 500 + 300));
-  };
-  const ss = window.speechSynthesis;
-  if (!malayVoice) pickVoice();                 // senarai suara mungkin lambat dimuat (Safari/Chrome)
-  if (!state.soundOn || !ss || typeof SpeechSynthesisUtterance === "undefined") { timed(); return; }
-  let allVoices = [];
-  try { allVoices = ss.getVoices() || []; } catch (e) { /* abaikan */ }
-  if (!allVoices.length) { timed(); return; }   // peranti tiada suara langsung: jangan tunggu
-  try {
-    ss.cancel();
-    speechQ = parts.map((txt, i) => {
-      const u = new SpeechSynthesisUtterance(txt);
-      if (malayVoice) { u.voice = malayVoice; u.lang = malayVoice.lang; } else { u.lang = "ms-MY"; }
-      u.volume = 1;
-      u.rate = i < parts.length - 1 ? .7 : .85; u.pitch = 1.1;
-      u.onstart = () => { if (!alive() || fallback) return; started = true; onPart(i); };
-      u.onend = () => { if (!alive() || fallback) return; if (i === parts.length - 1) timers.push(setTimeout(finish, 250)); };
-      u.onerror = () => { if (!alive() || fallback) return; if (started) finish(); };
-      return u;
-    });
-    // mula selepas bunyi serangan supaya suara jelas
-    timers.push(setTimeout(() => { if (alive()) speechQ.forEach(u => ss.speak(u)); }, 250));
-    // suara tidak bermula dalam masa munasabah → batal & guna paparan bermasa
-    timers.push(setTimeout(() => { if (alive() && !started) { try { ss.cancel(); } catch (e) {} timed(); } }, 4000));
-    // had keselamatan
-    timers.push(setTimeout(finish, 8000));
-  } catch (e) { timed(); }
-}
-/* Sebut perkataan & paparkan suku kata seiring.
-   autoNext = true: teruskan ke soalan seterusnya selepas sebutan tamat. */
-function sayWord(q, tok, autoNext, minTotal) {
+/* Paparkan suku kata, kemudian teruskan ke soalan seterusnya. */
+function showSyllables(q, tok, minTotal) {
   const t0 = Date.now();
   clearTimeout(state.autoTimer);
-  speakParts([q.syllables[0], q.syllables[1], q.word],
+  revealSequence(3,
     (i) => { if (tok === state.token) revealPart(i); },
     () => {
       if (tok !== state.token) return;
@@ -1285,33 +1219,20 @@ function sayWord(q, tok, autoNext, minTotal) {
       document.querySelectorAll("#fview .say").forEach(el => el.classList.remove("say"));
       state.ready = true;
       $("btnNext").disabled = false;
-      if (autoNext) {
-        const wait = Math.max((minTotal || 1500) - (Date.now() - t0), 1000);
-        state.autoTimer = setTimeout(() => { if (tok === state.token) nextQuestion(); }, wait);
-      }
+      const wait = Math.max((minTotal || 1500) - (Date.now() - t0), 1000);
+      state.autoTimer = setTimeout(() => { if (tok === state.token) nextQuestion(); }, wait);
     });
 }
-/* Butang "Uji Bunyi" di skrin pertama: membantu guru semak audio peranti */
+/* Butang "Uji bunyi" di skrin pertama: membantu guru semak audio peranti */
 function testAudio() {
   unlockAudio();
   if (!state.soundOn) { state.soundOn = true; renderSoundBtn(); }
-  playSound("correct");
+  playSound("victory");
   const msg = $("testMsg");
-  pickVoice();
-  msg.textContent = "🎵 Bunyi dimainkan...";
+  msg.textContent = "🎵 Dengar lagu pendek? Jika ya, bunyi berfungsi. Jika tidak, semak kelantangan peranti.";
   msg.classList.add("show");
-  setTimeout(() => {
-    pickVoice();
-    let n = 0;
-    try { n = window.speechSynthesis ? window.speechSynthesis.getVoices().length : 0; } catch (e) { /* abaikan */ }
-    speakParts(["ba", "ju", "baju"], () => {}, () => {
-      msg.textContent = !n ? "⚠️ Peranti ini tiada suara sebutan. Kesan bunyi tetap berfungsi."
-        : malayVoice ? "✅ Bunyi OK. Suara: " + malayVoice.name
-        : "⚠️ Tiada suara Bahasa Melayu — sebutan guna suara lalai peranti.";
-      clearTimeout(msg._t);
-      msg._t = setTimeout(() => msg.classList.remove("show"), 6000);
-    });
-  }, 450);
+  clearTimeout(msg._t);
+  msg._t = setTimeout(() => msg.classList.remove("show"), 6000);
 }
 function revealPart(i) {
   document.querySelectorAll("#fview .fsyl [data-p]").forEach(el => {
@@ -1404,7 +1325,7 @@ function startGame() {
 function loadQuestion() {
   const q = state.questions[state.qIndex];
   state.token++;
-  stopSpeech();
+  stopReveal();
   state.answered = false;
   state.busy = false;
   state.triedWrong = false;
@@ -1461,7 +1382,7 @@ function correctAnswer(btn, q) {
 
     const defeated = state.hp <= 0;
     if (defeated) setTimeout(() => { if (tok === state.token) defeatMonster(); }, 650);
-    sayWord(q, tok, true, defeated ? 2600 : 1500);
+    showSyllables(q, tok, defeated ? 2600 : 1500);
   });
 }
 
@@ -1485,7 +1406,7 @@ function showFeedback(q, firstTry) {
   const head = firstTry ? rand(PRAISE) : rand(RETRY_PRAISE);
   fv.innerHTML =
     `<div class="praise"><span class="ok" aria-hidden="true">✓</span>${head}` +
-      `<button type="button" class="replay" id="btnReplay" aria-label="Dengar sebutan lagi">${ICON.soundOn}</button></div>` +
+      `</div>` +
     `<div class="fsyl" aria-label="${q.syllables[0]} tambah ${q.syllables[1]} sama dengan ${q.word}">` +
       `<span class="syl s1" data-p="0" data-say="1">${q.syllables[0]}</span>` +
       `<span class="eq" data-p="1">+</span>` +
@@ -1495,13 +1416,6 @@ function showFeedback(q, firstTry) {
     (firstTry ? "" : `<p class="fnote">Markah diberi untuk jawapan betul kali pertama.</p>`);
   $("qview").classList.add("hidden");
   fv.classList.remove("hidden");
-  const rb = $("btnReplay");
-  if (rb) rb.addEventListener("click", (e) => {
-    e.stopPropagation();
-    unlockAudio();
-    if (!state.answered) return;
-    sayWord(q, state.token, false);            // ulang sebutan; murid tekan "Soalan Seterusnya" sendiri
-  });
   $("answers").classList.add("hidden");
   $("nextWrap").classList.remove("hidden");
   const nb = $("btnNext");
@@ -1708,7 +1622,7 @@ function confetti(n) {
    ========================================================= */
 function showResult() {
   clearTimeout(state.autoTimer);
-  stopSpeech();
+  stopReveal();
   const s = state.score;
   const stars = s >= 90 ? 3 : s >= 70 ? 2 : 1;
   const msg = s >= 90 ? "Luar biasa! Kamu Juara KV+KV!"
@@ -1733,7 +1647,7 @@ function restartGame() {
 function goHome() {
   playSound("click");
   clearTimeout(state.autoTimer);
-  stopSpeech();
+  stopReveal();
   state.token++;
   state.name = "";
   $("nameInput").value = "";
@@ -1779,12 +1693,6 @@ function init() {
   $("btnAgain").addEventListener("click", restartGame);
   $("btnHome").addEventListener("click", goHome);
 
-  if ("speechSynthesis" in window) {
-    pickVoice();
-    try { window.speechSynthesis.addEventListener("voiceschanged", pickVoice); } catch (e) { window.speechSynthesis.onvoiceschanged = pickVoice; }
-    let polls = 0;
-    const iv = setInterval(() => { pickVoice(); if (malayVoice || ++polls > 24) clearInterval(iv); }, 250);
-  }
   ["pointerdown", "touchend", "keydown", "click"].forEach(ev =>
     document.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
   $("btnTest").addEventListener("click", testAudio);
